@@ -397,7 +397,19 @@ def approved_policy():
 def proposed_operation(msg,category,mode,policy,opts):
     """Never act on unknown or mixed/unverified policy senders. Only explicit opt-in."""
     sender=address(msg['sender'])
-    if mode=='dry_run' or not opts.get('enable_actions',False) or category not in policy.get(sender,set()):
+    if mode=='dry_run' or not opts.get('enable_actions',False):
+        return None
+    explicitly_approved = category in policy.get(sender,set())
+    # Optional bulk filing is reversible. Only marketing/list mail qualifies;
+    # security, purchases, transactions, suspicious and mixed senders stay put.
+    auto_marketing = (
+        opts.get('auto_file_marketing',False)
+        and category in ('Promotions','Newsletters')
+        and bool(sender) and '@' in sender
+        and bool(msg.get('flags',{}).get('list'))
+        and sender not in opts.get('_protected_marketing_senders',set())
+    )
+    if not explicitly_approved and not auto_marketing:
         return None
     # Protect time-sensitive/account/financial exceptions regardless of sender preferences.
     if category in ('Important','Transactions','Purchase Issues','Suspicious','Review'):
@@ -630,6 +642,14 @@ def once():
         try:
             # Reads work with either OAuth scope; writes only with gmail.modify.
             messages=fetch(config,days,limit) if account=='yahoo' else fetch(config,days,limit,GMAIL_READ_SCOPE if mode=='dry_run' or not opts.get('enable_actions',False) else GMAIL_MODIFY_SCOPE)
+            # A sender with any non-marketing mail in this scan is excluded
+            # from bulk marketing filing, even for its promotional messages.
+            # Explicit sender approvals retain their existing behaviour.
+            protective_categories={'Important','Transactions','Purchases','Purchase Issues','Delivery Updates','Suspicious','Review','Low Priority'}
+            opts['_protected_marketing_senders']={
+                address(msg['sender']) for msg in messages
+                if classify(msg,prefs)[0] in protective_categories
+            }
             counts,senders=write_reports(account,messages,prefs,preview_policy)
             total.update(counts)
             candidate_count=sum(proposed_operation(msg,classify(msg,prefs)[0],'safe',preview_policy,{'enable_actions':True,'trash_old_delivery_updates':False}) is not None for msg in messages)
@@ -641,7 +661,7 @@ def once():
                 op=proposed_operation(msg,cat,mode,policy,opts)
                 if op:
                     work.append((msg,cat,op))
-            LOG.info('%s: eligible for approved actions=%d, mode=%s, enabled=%s',account.capitalize(),len(work),mode,bool(opts.get('enable_actions',False)))
+            LOG.info('%s: eligible for approved actions=%d, mode=%s, enabled=%s, auto_marketing=%s',account.capitalize(),len(work),mode,bool(opts.get('enable_actions',False)),bool(opts.get('auto_file_marketing',False)))
             if account=='gmail':
                 for msg,cat,url in gmail_oneclick_unsubscribe_candidates(messages,opts,mode)[:3]:
                     try:
@@ -681,7 +701,7 @@ def once():
 
 def main():
     logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
-    LOG.info('Email Organiser v1.1.2; expanded rules gated separately, unsubscribe opt-in')
+    LOG.info('Email Organiser v1.1.3; expanded rules gated separately, unsubscribe opt-in')
     while True:
         try:
             once()
