@@ -18,6 +18,11 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Install Python dependencies and run offline policy tests
+        run: |
+          python3 -m pip install -r requirements.txt
+          python3 -m unittest discover -s tests -v
+
       - name: Check Python syntax
         run: python3 -m py_compile organiser.py
 
@@ -51,6 +56,6 @@ jobs:
           platforms: linux/arm64
           push: false
           build-args: |
-            BUILD_VERSION=1.1.2
+            BUILD_VERSION=1.1.3
             BUILD_ARCH=aarch64
           tags: email-organiser:ci
