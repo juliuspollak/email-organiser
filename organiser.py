@@ -582,20 +582,42 @@ def yahoo_apply_batch(config, items):
                     continue
                 target='Trash' if op[0]=='trash' else op[1]
                 if target not in folders and target!='Trash':
-                    stage='list_destination'
-                    # imaplib handles quoting when given a quoted mailbox string.
+                    # Yahoo accepts quoted SELECT and UID MOVE; LIST with a
+                    # mailbox pattern failed in production, so do not use it.
                     quoted='"'+target.replace('"','')+'"'
-                    typ_list,lst=client.list('','"'+target+'"')
-                    exists=typ_list=='OK' and bool(lst) and lst != [None]
-                    if not exists:
+                    stage='select_destination'
+                    typ_dest,_=client.select(quoted,readonly=True)
+                    if typ_dest!='OK':
                         stage='create_destination'
-                        typ_created,detail=client.create(quoted)
+                        typ_created,_=client.create(quoted)
                         if typ_created!='OK':
-                            # Another scan may have created it; confirm before failing.
-                            stage='recheck_destination'
-                            typ_list,lst=client.list('',quoted)
-                            if typ_list!='OK' or not lst or lst==[None]:
-                                raise RuntimeError('Destination folder could not be created')
+                            raise RuntimeError('Yahoo destination could not be created')
+                        stage='verify_destination'
+                        typ_dest,_=client.select(quoted,readonly=True)
+                        if typ_dest!='OK':
+                            raise RuntimeError('Yahoo destination not selectable')
+                    stage='reselect_inbox'
+                    typ_inbox,_=client.select('INBOX',readonly=False)
+                    if typ_inbox!='OK':
+                        raise RuntimeError('Yahoo Inbox could not be reselected for writing')
+                    # Revalidate the UID after switching mailboxes before MOVE.
+                    stage='recheck_inbox_uid'
+                    typ_search,data_search=client.uid('SEARCH',None,'ALL')
+                    if typ_search!='OK':
+                        raise RuntimeError('Yahoo Inbox UID recheck failed')
+                    available=set(data_search[0].split()) if data_search and data_search[0] else set()
+                    if uid not in available:
+                        outcomes.append((msg,category,op,'skipped_not_in_inbox'))
+                        continue
+                    stage='recheck_flags'
+                    typ_flags,raw_flags=client.uid('FETCH',uid,'(FLAGS)')
+                    if typ_flags!='OK':
+                        outcomes.append((msg,category,op,'failed_flags'))
+                        continue
+                    fresh_flags=b' '.join(x[0] if isinstance(x,tuple) else x for x in raw_flags if isinstance(x,(bytes,tuple)))
+                    if b'\\Flagged' in fresh_flags or b'\\Deleted' in fresh_flags:
+                        outcomes.append((msg,category,op,'skipped_flagged'))
+                        continue
                     folders.add(target)
                 stage='uid_move'
                 typ,detail=client.uid('MOVE',uid,'"'+target+'"')
@@ -701,7 +723,7 @@ def once():
 
 def main():
     logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
-    LOG.info('Email Organiser v1.1.3; expanded rules gated separately, unsubscribe opt-in')
+    LOG.info('Email Organiser v1.1.4; expanded rules gated separately, unsubscribe opt-in')
     while True:
         try:
             once()
