@@ -53,6 +53,26 @@ class FilingPolicyTests(unittest.TestCase):
         self.opts["_protected_marketing_senders"] = {"offers@example.com"}
         self.assertIsNone(proposed_operation(message(), "Promotions", "safe", {}, self.opts))
 
+    def test_bulk_mode_files_individual_marketing_from_mixed_sender(self):
+        self.opts["_protected_marketing_senders"] = {"offers@example.com"}
+        self.opts["bulk_backlog_enabled"] = True
+        self.assertEqual(
+            proposed_operation(message(), "Promotions", "safe", {}, self.opts),
+            ("move", "EO Promotions"),
+        )
+
+    def test_bulk_mode_still_protects_non_marketing_message(self):
+        self.opts["bulk_backlog_enabled"] = True
+        for category in ("Important", "Transactions", "Suspicious", "Purchase Issues", "Review"):
+            with self.subTest(category=category):
+                self.assertIsNone(proposed_operation(message(),category,"safe",{},self.opts))
+
+    def test_bulk_mode_rejects_obfuscated_marketing_subject(self):
+        self.opts["bulk_backlog_enabled"] = True
+        msg=message()
+        msg["subject"]="D\\u200ciscount offer"
+        self.assertIsNone(proposed_operation(msg,"Promotions","safe",{},self.opts))
+
     def test_important_and_transactions_never_auto_move(self):
         for category in ("Important", "Transactions", "Purchase Issues", "Suspicious", "Review", "Purchases"):
             with self.subTest(category=category):
