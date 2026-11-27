@@ -70,7 +70,7 @@ class FilingPolicyTests(unittest.TestCase):
     def test_bulk_mode_rejects_obfuscated_marketing_subject(self):
         self.opts["bulk_backlog_enabled"] = True
         msg=message()
-        msg["subject"]="D\\u200ciscount offer"
+        msg["subject"]="D"+chr(0x200c)+"iscount offer"
         self.assertIsNone(proposed_operation(msg,"Promotions","safe",{},self.opts))
 
     def test_important_and_transactions_never_auto_move(self):
