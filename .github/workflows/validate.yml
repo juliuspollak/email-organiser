@@ -56,6 +56,6 @@ jobs:
           platforms: linux/arm64
           push: false
           build-args: |
-            BUILD_VERSION=1.1.4
+            BUILD_VERSION=1.2.0
             BUILD_ARCH=aarch64
           tags: email-organiser:ci
