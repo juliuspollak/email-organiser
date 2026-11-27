@@ -38,7 +38,7 @@ BACKLOG_PROGRESS = BASE / 'backlog_progress.json'
 
 def save_backlog_progress(account, page):
     """Persist scan position without storing message contents or identifiers."""
-    data=read_json(BACKLOG_PROGRESS,{})
+    data=read_json(BASE / 'backlog_progress.json',{})
     if not isinstance(data,dict):
         data={}
     data[account]=max(0,int(page))
@@ -48,7 +48,7 @@ def save_backlog_progress(account, page):
         with os.fdopen(fd,'w',encoding='utf-8') as handle:
             json.dump(data,handle)
         os.chmod(tmp,0o600)
-        os.replace(tmp,BACKLOG_PROGRESS)
+        os.replace(tmp,BASE / 'backlog_progress.json')
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
@@ -330,7 +330,7 @@ def gmail_messages(config,days,limit, required_scope=GMAIL_READ_SCOPE, backlog=F
     # Gmail lists newest first. Rotate through pages between scans, so older
     # mail is eventually inspected even if the first page contains no moves.
     page_size=min(500,limit)
-    page_index=max(0,int(read_json(BACKLOG_PROGRESS,{}).get('gmail',0))) if backlog else 0
+    page_index=max(0,int(read_json(BASE / 'backlog_progress.json',{}).get('gmail',0))) if backlog else 0
     page_token=None
     response=None
     for index in range(page_index+1):
@@ -386,7 +386,7 @@ def yahoo_messages(config,days,limit,backlog=False):
         # Yahoo UID SEARCH returns matching UIDs; rotate over slices of that
         # result. Avoid an unbounded FETCH of the entire Inbox each scan.
         all_uids=data[0].split()[::-1] if data and data[0] else []
-        page_index=max(0,int(read_json(BACKLOG_PROGRESS,{}).get('yahoo',0))) if backlog else 0
+        page_index=max(0,int(read_json(BASE / 'backlog_progress.json',{}).get('yahoo',0))) if backlog else 0
         start=page_index*limit
         if start>=len(all_uids):
             page_index=0
