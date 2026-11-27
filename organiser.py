@@ -33,6 +33,26 @@ LOG = logging.getLogger('email_organiser')
 GMAIL_READ_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly'
 GMAIL_MODIFY_SCOPE = 'https://www.googleapis.com/auth/gmail.modify'
 AUDIT_FILE = BASE / 'audit.jsonl'
+BACKLOG_PROGRESS = BASE / 'backlog_progress.json'
+
+
+def save_backlog_progress(account, page):
+    """Persist scan position without storing message contents or identifiers."""
+    data=read_json(BACKLOG_PROGRESS,{})
+    if not isinstance(data,dict):
+        data={}
+    data[account]=max(0,int(page))
+    BASE.mkdir(parents=True,exist_ok=True)
+    fd,tmp=tempfile.mkstemp(dir=BASE,prefix='.backlog-')
+    try:
+        with os.fdopen(fd,'w',encoding='utf-8') as handle:
+            json.dump(data,handle)
+        os.chmod(tmp,0o600)
+        os.replace(tmp,BACKLOG_PROGRESS)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
 LABELS = {'Purchases': 'EO Purchases', 'Delivery Updates': 'EO Low Priority', 'Low Priority': 'EO Low Priority', 'Review': 'EO Review', 'Newsletters': 'EO Review', 'Promotions': 'EO Promotions'}
 VALID_PREFS = {'Important', 'Transactions', 'Purchases', 'Delivery Updates', 'Purchase Issues', 'Review', 'Low Priority', 'Promotions', 'Newsletters', 'Suspicious'}
 FIELDS = ['message_id', 'sender', 'subject', 'category', 'confidence_heuristic', 'reason', 'unsubscribe_header_present', 'list_header_present', 'auth_result', 'proposed_action', 'planned_action', 'actual_action']
@@ -282,7 +302,7 @@ def write_reports(account, messages, prefs, preview_policy=None, actual_outcomes
     return counts,len(senders)
 
 
-def gmail_messages(config,days,limit, required_scope=GMAIL_READ_SCOPE):
+def gmail_messages(config,days,limit, required_scope=GMAIL_READ_SCOPE, backlog=False):
     token = BASE / 'gmail_token.json'
     if not token.exists():
         LOG.info('Gmail SKIPPED: gmail_token.json missing')
@@ -307,7 +327,27 @@ def gmail_messages(config,days,limit, required_scope=GMAIL_READ_SCOPE):
     if identity != config['gmail_email'].lower():
         raise RuntimeError('Gmail account mismatch')
     url='https://gmail.googleapis.com/gmail/v1/users/me/messages'
-    ids=get(url,{'q':f'in:inbox newer_than:{days}d','maxResults':limit}).get('messages',[])
+    # Gmail lists newest first. Rotate through pages between scans, so older
+    # mail is eventually inspected even if the first page contains no moves.
+    page_size=min(500,limit)
+    page_index=max(0,int(read_json(BACKLOG_PROGRESS,{}).get('gmail',0))) if backlog else 0
+    page_token=None
+    response=None
+    for index in range(page_index+1):
+        params={'q':f'in:inbox newer_than:{days}d','maxResults':page_size}
+        if page_token:
+            params['pageToken']=page_token
+        response=get(url,params)
+        next_token=response.get('nextPageToken')
+        if index < page_index:
+            if not next_token:
+                # Inbox got shorter since the previous scan. Wrap to page zero.
+                page_index=0
+                response=get(url,{'q':f'in:inbox newer_than:{days}d','maxResults':page_size})
+                break
+            page_token=next_token
+    ids=response.get('messages',[])
+    next_page=page_index+1 if backlog and response.get('nextPageToken') else 0
     records=[]
     wanted=['From','Subject','List-Unsubscribe','List-ID','Precedence','Auto-Submitted','Authentication-Results','List-Unsubscribe-Post']
     for entry in ids:
@@ -319,10 +359,13 @@ def gmail_messages(config,days,limit, required_scope=GMAIL_READ_SCOPE):
         records.append({'id':entry['id'],'sender':decoded(hs.get('from')),
                         'subject':decoded(hs.get('subject')),'flags':fl,
                         'age_days': max(0,(time.time()*1000-int(datum.get('internalDate',0)))/86400000) if datum.get('internalDate') else None})
+    if backlog:
+        save_backlog_progress('gmail',next_page)
+        LOG.info('Gmail backlog: scanned page=%d, next_page=%d, batch_size=%d',page_index,next_page,len(ids))
     return records
 
 
-def yahoo_messages(config,days,limit):
+def yahoo_messages(config,days,limit,backlog=False):
     token=BASE / 'yahoo_app_password.txt'
     if not token.exists():
         LOG.info('Yahoo SKIPPED: password file missing')
@@ -340,7 +383,17 @@ def yahoo_messages(config,days,limit):
         typ,data=imap.uid('SEARCH',None,'SINCE',since)
         if typ!='OK':
             raise RuntimeError('Yahoo UID search failed')
-        for uid in data[0].split()[-limit:][::-1]:
+        # Yahoo UID SEARCH returns matching UIDs; rotate over slices of that
+        # result. Avoid an unbounded FETCH of the entire Inbox each scan.
+        all_uids=data[0].split()[::-1] if data and data[0] else []
+        page_index=max(0,int(read_json(BACKLOG_PROGRESS,{}).get('yahoo',0))) if backlog else 0
+        start=page_index*limit
+        if start>=len(all_uids):
+            page_index=0
+            start=0
+        batch=all_uids[start:start+limit]
+        next_page=page_index+1 if backlog and start+limit<len(all_uids) else 0
+        for uid in batch:
             typ,raw=imap.uid('FETCH',uid,'(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT LIST-UNSUBSCRIBE LIST-ID PRECEDENCE AUTO-SUBMITTED AUTHENTICATION-RESULTS)])')
             if typ!='OK':
                 continue
@@ -352,6 +405,9 @@ def yahoo_messages(config,days,limit):
                 continue
             records.append({'id':uid.decode('ascii','replace'),'sender':decoded(hs.get('From')),
                             'subject':decoded(hs.get('Subject')),'flags':fl, 'age_days': None})
+    if backlog:
+        save_backlog_progress('yahoo',next_page)
+        LOG.info('Yahoo backlog: scanned page=%d, next_page=%d, batch_size=%d',page_index,next_page,len(batch))
     return records
 
 
@@ -407,7 +463,11 @@ def proposed_operation(msg,category,mode,policy,opts):
         and category in ('Promotions','Newsletters')
         and bool(sender) and '@' in sender
         and bool(msg.get('flags',{}).get('list'))
-        and sender not in opts.get('_protected_marketing_senders',set())
+        and (opts.get('bulk_backlog_enabled',False)
+             or sender not in opts.get('_protected_marketing_senders',set()))
+        # Obfuscated Unicode format characters in subjects are not safe to
+        # bulk-file on a subject/list-header heuristic.
+        and not any(unicodedata.category(ch)=='Cf' for ch in msg.get('subject',''))
     )
     if not explicitly_approved and not auto_marketing:
         return None
@@ -648,8 +708,9 @@ def full_policy(base, expanded):
 def once():
     config=read_json(BASE/'accounts.json')
     opts,mode=current_options()
-    days=min(90,max(1,int(opts.get('history_days',30))))
-    limit=min(200,max(1,int(opts.get('max_per_account',150))))
+    bulk=bool(opts.get('bulk_backlog_enabled',False))
+    days=min(3650,max(1,int(opts.get('history_days',30))))
+    limit=min(500,max(1,int(opts.get('max_per_account',150))))
     prefs=preferences()
     policy=approved_policy()
     more=expanded_policy()
@@ -663,7 +724,7 @@ def once():
             continue
         try:
             # Reads work with either OAuth scope; writes only with gmail.modify.
-            messages=fetch(config,days,limit) if account=='yahoo' else fetch(config,days,limit,GMAIL_READ_SCOPE if mode=='dry_run' or not opts.get('enable_actions',False) else GMAIL_MODIFY_SCOPE)
+            messages=fetch(config,days,limit,backlog=bulk) if account=='yahoo' else fetch(config,days,limit,GMAIL_READ_SCOPE if mode=='dry_run' or not opts.get('enable_actions',False) else GMAIL_MODIFY_SCOPE,backlog=bulk)
             # A sender with any non-marketing mail in this scan is excluded
             # from bulk marketing filing, even for its promotional messages.
             # Explicit sender approvals retain their existing behaviour.
@@ -723,7 +784,7 @@ def once():
 
 def main():
     logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
-    LOG.info('Email Organiser v1.1.4; expanded rules gated separately, unsubscribe opt-in')
+    LOG.info('Email Organiser v1.2.0; expanded rules gated separately, unsubscribe opt-in')
     while True:
         try:
             once()
