@@ -22,6 +22,8 @@ from pathlib import Path
 import google.auth.transport.requests
 from google.oauth2.credentials import Credentials
 import requests
+from cym_mailparse import ParsedHeaders
+from cym_safety import classify as classify_upstream
 
 BASE = Path('/config')
 OPTS = Path('/data/options.json')
@@ -125,6 +127,36 @@ def normalised_subject(value):
                 or 0xFE00 <= ord(ch) <= 0xFE0F)
     # Remove injection-like hidden characters and internal tabs; keep real spaces.
     return re.sub(r' +', ' ', ''.join(ch for ch in folded if not hidden(ch) and ch not in '\t\r\n')).strip()
+
+
+def upstream_classification(msg):
+    """CleanYourMail MIT-licensed scoring/protection, with no message body.
+
+    Only use upstream signals when actual provider headers were captured. A
+    failing or incomplete classifier must not authorise a mailbox change.
+    """
+    headers=msg.get('raw_headers')
+    if not isinstance(headers,dict):
+        return None
+    sender_name,sender_addr=parseaddr(msg.get('sender',''))
+    try:
+        parsed=ParsedHeaders(
+            from_name=sender_name or '',
+            from_addr=(sender_addr or '').lower(),
+            subject=msg.get('subject',''),
+            reply_to=headers.get('reply-to',''),
+            to_addrs=[address(headers.get('to',''))] if address(headers.get('to','')) else [],
+            list_unsub=headers.get('list-unsubscribe',''),
+            list_id=headers.get('list-id',''),
+            precedence=headers.get('precedence',''),
+            auto_submitted=headers.get('auto-submitted',''),
+            auth_results=headers.get('authentication-results',''),
+            feedback_id=headers.get('feedback-id',''),
+            x_campaign=headers.get('x-campaign',''),
+        )
+        return classify_upstream(parsed)
+    except (ValueError,TypeError,AttributeError):
+        return None
 
 
 def commercial_sender_subject(msg):
@@ -289,6 +321,12 @@ def classify(msg, prefs):
         return 'Low Priority', .75, 'Routine non-urgent activity notification', 'LOW PRIORITY REVIEW'
     if f['list'] or any(t in s for t in newsletter_terms):
         return 'Newsletters', .64, 'Newsletter/list evidence; sender intent not fully verified', 'NEWSLETTER REVIEW'
+    upstream=upstream_classification(msg)
+    if upstream and not upstream.protected and upstream.bulk and upstream.confidence>=50:
+        if upstream.category=='promotion':
+            return 'Promotions',upstream.confidence/100,'CleanYourMail: '+', '.join(upstream.reasons),'MOVE TO EO PROMOTIONS - REVERSIBLE'
+        if upstream.category=='newsletter':
+            return 'Newsletters',upstream.confidence/100,'CleanYourMail: '+', '.join(upstream.reasons),'MOVE TO EO REVIEW - REVERSIBLE'
     return 'Review', .20, 'Insufficient evidence; no automatic changes', 'REVIEW'
 
 
@@ -394,7 +432,7 @@ def gmail_messages(config,days,limit, required_scope=GMAIL_READ_SCOPE, backlog=F
     ids=response.get('messages',[])
     next_page=page_index+1 if backlog and response.get('nextPageToken') else 0
     records=[]
-    wanted=['From','Subject','List-Unsubscribe','List-ID','Precedence','Auto-Submitted','Authentication-Results','List-Unsubscribe-Post']
+    wanted=['From','To','Reply-To','Subject','List-Unsubscribe','List-ID','Precedence','Auto-Submitted','Authentication-Results','List-Unsubscribe-Post','Feedback-ID','X-Campaign']
     for entry in ids:
         datum=get(f"{url}/{entry['id']}",{'format':'metadata','metadataHeaders':wanted})
         hs={x['name'].lower():x['value'] for x in datum['payload'].get('headers',[])}
@@ -403,7 +441,7 @@ def gmail_messages(config,days,limit, required_scope=GMAIL_READ_SCOPE, backlog=F
             continue
         records.append({'id':entry['id'],'sender':decoded(hs.get('from')),
                         'subject':decoded(hs.get('subject')),'flags':fl,
-                        'gmail_labels':datum.get('labelIds',[]),
+                        'gmail_labels':datum.get('labelIds',[]), 'raw_headers':hs,
                         'age_days': max(0,(time.time()*1000-int(datum.get('internalDate',0)))/86400000) if datum.get('internalDate') else None})
     if backlog:
         save_backlog_progress('gmail',next_page)
@@ -440,17 +478,17 @@ def yahoo_messages(config,days,limit,backlog=False):
         batch=all_uids[start:start+limit]
         next_page=page_index+1 if backlog and start+limit<len(all_uids) else 0
         for uid in batch:
-            typ,raw=imap.uid('FETCH',uid,'(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT LIST-UNSUBSCRIBE LIST-ID PRECEDENCE AUTO-SUBMITTED AUTHENTICATION-RESULTS)])')
+            typ,raw=imap.uid('FETCH',uid,'(BODY.PEEK[HEADER.FIELDS (FROM TO REPLY-TO SUBJECT LIST-UNSUBSCRIBE LIST-ID PRECEDENCE AUTO-SUBMITTED AUTHENTICATION-RESULTS FEEDBACK-ID X-CAMPAIGN)])')
             if typ!='OK':
                 continue
             payload=next((p[1] for p in raw if isinstance(p,tuple)),b'')
             hs=email.message_from_bytes(payload)
-            header_map={x.lower():str(hs.get(x,'')) for x in ['From','Subject','List-Unsubscribe','List-ID','Precedence','Auto-Submitted','Authentication-Results','List-Unsubscribe-Post']}
+            header_map={x.lower():str(hs.get(x,'')) for x in ['From','To','Reply-To','Subject','List-Unsubscribe','List-ID','Precedence','Auto-Submitted','Authentication-Results','List-Unsubscribe-Post','Feedback-ID','X-Campaign']}
             fl=flags(header_map)
             if fl['auto']:
                 continue
             records.append({'id':uid.decode('ascii','replace'),'sender':decoded(hs.get('From')),
-                            'subject':decoded(hs.get('Subject')),'flags':fl, 'age_days': None})
+                            'subject':decoded(hs.get('Subject')),'flags':fl, 'raw_headers':header_map, 'age_days': None})
     if backlog:
         save_backlog_progress('yahoo',next_page)
         LOG.info('Yahoo backlog: scanned page=%d, next_page=%d, batch_size=%d',page_index,next_page,len(batch))
@@ -554,6 +592,12 @@ def proposed_operation(msg,category,mode,policy,opts):
             or (opts.get('bulk_backlog_enabled',False)
                 and category=='Promotions'
                 and (strong_marketing_evidence(msg) or commercial_sender_subject(msg)))
+            or (opts.get('bulk_backlog_enabled',False)
+                and upstream_classification(msg) is not None
+                and upstream_classification(msg).bulk
+                and not upstream_classification(msg).protected
+                and upstream_classification(msg).confidence>=50
+                and upstream_classification(msg).category in ('promotion','newsletter'))
         )
         and (opts.get('bulk_backlog_enabled',False)
              or sender not in opts.get('_protected_marketing_senders',set()))
@@ -561,6 +605,10 @@ def proposed_operation(msg,category,mode,policy,opts):
         # bulk-file on a subject/list-header heuristic.
         and not any(unicodedata.category(ch)=='Cf' for ch in msg.get('subject',''))
     )
+    upstream=upstream_classification(msg) if category in ('Promotions','Newsletters') else None
+    # Independent upstream protection is a veto, not a reason to move mail.
+    if upstream and upstream.protected:
+        return None
     if not explicitly_approved and not auto_marketing:
         return None
     # Protect time-sensitive/account/financial exceptions regardless of sender preferences.
@@ -888,7 +936,7 @@ def once():
 
 def main():
     logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
-    LOG.info('Email Organiser v1.4.0; one-switch reversible bulk filing')
+    LOG.info('Email Organiser v1.5.0; one-switch reversible bulk filing')
     while True:
         try:
             once()
