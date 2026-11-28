@@ -35,9 +35,9 @@ jobs:
           data = yaml.safe_load(Path("config.yaml").read_text())
           assert data["slug"] == "email_organiser"
           assert "aarch64" in data["arch"]
-          assert data["options"]["mode"] == "dry_run"
-          assert data["options"]["enable_actions"] is False
-          assert data["options"]["enable_unsubscribe"] is False
+          assert data["options"]["organise_mail"] is True
+          assert list(data["options"]) == ["organise_mail"]
+          assert data["schema"]["organise_mail"] == "bool"
           assert Path("Dockerfile").is_file()
           assert Path("requirements.txt").is_file()
           print("Home Assistant configuration and safe defaults: OK")
@@ -56,6 +56,6 @@ jobs:
           platforms: linux/arm64
           push: false
           build-args: |
-            BUILD_VERSION=1.2.1
+            BUILD_VERSION=1.3.0
             BUILD_ARCH=aarch64
           tags: email-organiser:ci
