@@ -233,7 +233,6 @@ def classify(msg, prefs):
     # our keyword guesses. Subject-level protections above still take priority.
     gmail_labels=set(msg.get('gmail_labels',[]))
     if ('CATEGORY_PROMOTIONS' in gmail_labels
-            and 'IMPORTANT' not in gmail_labels
             and 'STARRED' not in gmail_labels
             and 'CATEGORY_PERSONAL' not in gmail_labels):
         return 'Promotions', .92, 'Gmail Promotions category', 'MOVE TO EO PROMOTIONS - REVERSIBLE'
@@ -514,7 +513,6 @@ def proposed_operation(msg,category,mode,policy,opts):
             bool(msg.get('flags',{}).get('list'))
             or (category=='Promotions'
                 and 'CATEGORY_PROMOTIONS' in msg.get('gmail_labels',[])
-                and 'IMPORTANT' not in msg.get('gmail_labels',[])
                 and 'STARRED' not in msg.get('gmail_labels',[]))
             or (opts.get('bulk_backlog_enabled',False)
                 and category=='Promotions'
