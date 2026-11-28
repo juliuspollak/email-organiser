@@ -127,6 +127,40 @@ def normalised_subject(value):
     return re.sub(r' +', ' ', ''.join(ch for ch in folded if not hidden(ch) and ch not in '\t\r\n')).strip()
 
 
+def commercial_sender_subject(msg):
+    """Two independent clues: commercial sender display name and promotional subject.
+
+    This is deliberately narrower than matching a single generic subject word.
+    Protect transaction/security and purchase-exception subjects separately.
+    """
+    display_name=parseaddr(msg.get('sender',''))[0].casefold()
+    subject=normalised_subject(msg.get('subject',''))
+    commercial_name=re.search(
+        r'\\b(?:shop|store|outlet|publishing|photobook|accessories|'
+        r'gear|deals|retail|fashion|eyewear|catalogue)\\b',
+        display_name
+    )
+    marketing_subject=(
+        'introducing', 'just landed', 'has landed', 'have arrived',
+        'is here', 'are here', 'new arrivals', 'new collection',
+        'new 202', 'your cart', 'saved on shop', 'didn\'t want you to miss',
+        'didn’t want you to miss', 'weekend project', 'more than a charm',
+        'new product', 'new gear', 'exclusive offer',
+    )
+    sensitive=(
+        'account', 'password', 'verification', 'security', 'invoice',
+        'refund', 'payment', 'receipt', 'your order', 'delivery',
+        'tracking', 'shipment', 'return', 'cancelled', 'canceled',
+        'policy', 'appointment', 'statement',
+    )
+    return (
+        bool(commercial_name)
+        and any(term in subject for term in marketing_subject)
+        and not any(term in subject for term in sensitive)
+        and not any(unicodedata.category(ch)=='Cf' for ch in msg.get('subject',''))
+    )
+
+
 def classify(msg, prefs):
     """Classification suggestions only. Numeric scores are uncalibrated heuristics."""
     sender = address(msg['sender'])
@@ -236,6 +270,9 @@ def classify(msg, prefs):
             and 'STARRED' not in gmail_labels
             and 'CATEGORY_PERSONAL' not in gmail_labels):
         return 'Promotions', .92, 'Gmail Promotions category', 'MOVE TO EO PROMOTIONS - REVERSIBLE'
+
+    if commercial_sender_subject(msg):
+        return 'Promotions', .78, 'Commercial sender and promotional subject', 'MOVE TO EO PROMOTIONS - REVERSIBLE'
 
     if pref:
         proposed = {'Important':'KEEP IN INBOX','Transactions':'KEEP IN INBOX',
@@ -516,7 +553,7 @@ def proposed_operation(msg,category,mode,policy,opts):
                 and 'STARRED' not in msg.get('gmail_labels',[]))
             or (opts.get('bulk_backlog_enabled',False)
                 and category=='Promotions'
-                and strong_marketing_evidence(msg))
+                and (strong_marketing_evidence(msg) or commercial_sender_subject(msg)))
         )
         and (opts.get('bulk_backlog_enabled',False)
              or sender not in opts.get('_protected_marketing_senders',set()))
