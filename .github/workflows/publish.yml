@@ -1,8 +1,6 @@
 name: Publish Raspberry Pi image
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -25,6 +23,11 @@ jobs:
       - name: Check Python syntax
         run: python3 -m py_compile organiser.py
 
+      - name: Smoke-test actual runtime container imports
+        run: |
+          docker build --platform linux/amd64 -t email-organiser:smoke .
+          docker run --rm --entrypoint python email-organiser:smoke -c "import organiser, cym_mailparse, cym_safety; print('Runtime image imports: OK')"
+
       - name: Verify safe defaults and version
         shell: bash
         run: |
@@ -33,7 +36,7 @@ jobs:
           import yaml
           from pathlib import Path
           cfg = yaml.safe_load(Path('config.yaml').read_text())
-          assert cfg['version'] == '1.5.0', 'Update the release version before publishing'
+          assert cfg['version'] == '1.5.1', 'Update the release version before publishing'
           assert cfg['arch'] == ['aarch64']
           assert cfg['options'] == {}
           assert cfg['schema'] == {}
@@ -60,11 +63,11 @@ jobs:
           context: .
           platforms: linux/arm64
           push: true
-          tags: ghcr.io/juliuspollak/email-organiser:1.5.0
+          tags: ghcr.io/juliuspollak/email-organiser:1.5.1
           build-args: |
-            BUILD_VERSION=1.5.0
+            BUILD_VERSION=1.5.1
             BUILD_ARCH=aarch64
           labels: |
             org.opencontainers.image.source=https://github.com/juliuspollak/email-organiser
-            org.opencontainers.image.version=1.5.0
+            org.opencontainers.image.version=1.5.1
             org.opencontainers.image.description=Personal email organiser for Home Assistant OS
