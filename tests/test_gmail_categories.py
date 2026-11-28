@@ -41,10 +41,17 @@ class GmailNativeCategoryTests(unittest.TestCase):
         opts,mode=current_options()
         self.assertIsNone(proposed_operation(item,cat,mode,{},opts))
 
-    def test_google_important_mark_blocks_promotional_auto_move(self):
+    def test_gmail_automatic_important_mark_does_not_block_promotion(self):
         item=msg("Introducing a new product",["INBOX","IMPORTANT","CATEGORY_PROMOTIONS"])
         cat,_,_,_=classify(item,PREF)
         self.assertEqual(cat,"Promotions")
+        opts,mode=current_options()
+        self.assertEqual(proposed_operation(item,cat,mode,{},opts),
+                         ("move","EO Promotions"))
+
+    def test_user_starred_promotion_stays(self):
+        item=msg("Introducing a new product",["INBOX","STARRED","CATEGORY_PROMOTIONS"])
+        cat,_,_,_=classify(item,PREF)
         opts,mode=current_options()
         self.assertIsNone(proposed_operation(item,cat,mode,{},opts))
 
