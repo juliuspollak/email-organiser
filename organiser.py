@@ -229,6 +229,15 @@ def classify(msg, prefs):
         'card bill', 'available now', 'debt', 'free installation')):
         return 'Suspicious', .72, 'Obfuscated Unicode in financial/solicitation subject; investigate', 'SUSPICIOUS REVIEW - NEVER UNSUBSCRIBE'
 
+    # Gmail's built-in category is stronger evidence of commercial mail than
+    # our keyword guesses. Subject-level protections above still take priority.
+    gmail_labels=set(msg.get('gmail_labels',[]))
+    if ('CATEGORY_PROMOTIONS' in gmail_labels
+            and 'IMPORTANT' not in gmail_labels
+            and 'STARRED' not in gmail_labels
+            and 'CATEGORY_PERSONAL' not in gmail_labels):
+        return 'Promotions', .92, 'Gmail Promotions category', 'MOVE TO EO PROMOTIONS - REVERSIBLE'
+
     if pref:
         proposed = {'Important':'KEEP IN INBOX','Transactions':'KEEP IN INBOX',
                     'Purchases':'PURCHASES FOLDER - PROPOSED ONLY', 'Delivery Updates':'ARCHIVE DELIVERY UPDATE - PROPOSED ONLY', 'Purchase Issues':'KEEP IN INBOX / REVIEW ISSUE', 'Review':'REVIEW','Low Priority':'LOW PRIORITY REVIEW',
@@ -358,6 +367,7 @@ def gmail_messages(config,days,limit, required_scope=GMAIL_READ_SCOPE, backlog=F
             continue
         records.append({'id':entry['id'],'sender':decoded(hs.get('from')),
                         'subject':decoded(hs.get('subject')),'flags':fl,
+                        'gmail_labels':datum.get('labelIds',[]),
                         'age_days': max(0,(time.time()*1000-int(datum.get('internalDate',0)))/86400000) if datum.get('internalDate') else None})
     if backlog:
         save_backlog_progress('gmail',next_page)
@@ -511,6 +521,10 @@ def proposed_operation(msg,category,mode,policy,opts):
         and bool(sender) and '@' in sender
         and (
             bool(msg.get('flags',{}).get('list'))
+            or (category=='Promotions'
+                and 'CATEGORY_PROMOTIONS' in msg.get('gmail_labels',[])
+                and 'IMPORTANT' not in msg.get('gmail_labels',[])
+                and 'STARRED' not in msg.get('gmail_labels',[]))
             or (opts.get('bulk_backlog_enabled',False)
                 and category=='Promotions'
                 and strong_marketing_evidence(msg))
@@ -848,7 +862,7 @@ def once():
 
 def main():
     logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
-    LOG.info('Email Organiser v1.3.0; one-switch reversible bulk filing')
+    LOG.info('Email Organiser v1.4.0; one-switch reversible bulk filing')
     while True:
         try:
             once()
