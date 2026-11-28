@@ -55,6 +55,37 @@ class GmailNativeCategoryTests(unittest.TestCase):
         opts,mode=current_options()
         self.assertIsNone(proposed_operation(item,cat,mode,{},opts))
 
+    def test_real_marketing_examples_without_list_headers(self):
+        cases=[
+            ("Packt Publishing <offers@packt.example>","didn't want you to miss this one!"),
+            ("Photobook Worldwide <news@photo.example>","Your weekend project is here"),
+            ("MASH MX-MTB Outlet <news@mash.example>","New 2027 Leatt Riding Gear is Here!"),
+            ("Shop <hello@shop.example>","Your cart is saved on Shop"),
+            ("My Tesla Accessories <hello@tesla.example>","Your YL sunshade has landed"),
+        ]
+        opts,mode=current_options()
+        for sender,subject in cases:
+            with self.subTest(sender=sender):
+                item=msg(subject,["INBOX"],sender=sender)
+                cat,_,_,_=classify(item,PREF)
+                self.assertEqual(cat,"Promotions")
+                self.assertEqual(proposed_operation(item,cat,mode,{},opts),
+                                 ("move","EO Promotions"))
+
+    def test_merchant_transaction_is_protected(self):
+        item=msg("Your order confirmation and receipt",["INBOX"],
+                 sender="Shop <receipts@shop.example>")
+        cat,_,_,_=classify(item,PREF)
+        self.assertIn(cat,("Purchases","Transactions"))
+        opts,mode=current_options()
+        self.assertIsNone(proposed_operation(item,cat,mode,{},opts))
+
+    def test_public_service_update_not_automatically_promoted(self):
+        item=msg("Help to reduce healthcare costs",["INBOX"],
+                 sender="Service NSW <notifications@service.example>")
+        cat,_,_,_=classify(item,PREF)
+        self.assertEqual(cat,"Review")
+
     def test_obfuscated_subject_cannot_be_moved(self):
         item=msg("Introducing"+chr(0x200c)+" new gear",["INBOX","CATEGORY_PROMOTIONS"])
         cat,_,_,_=classify(item,PREF)
