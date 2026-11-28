@@ -26,6 +26,11 @@ jobs:
       - name: Check Python syntax
         run: python3 -m py_compile organiser.py
 
+      - name: Smoke-test actual runtime container imports
+        run: |
+          docker build --platform linux/amd64 -t email-organiser:smoke .
+          docker run --rm --entrypoint python email-organiser:smoke -c "import organiser, cym_mailparse, cym_safety; print('Runtime image imports: OK')"
+
       - name: Check configuration and safety defaults
         run: |
           python3 -m pip install --quiet PyYAML
@@ -56,6 +61,6 @@ jobs:
           platforms: linux/arm64
           push: false
           build-args: |
-            BUILD_VERSION=1.5.0
+            BUILD_VERSION=1.5.1
             BUILD_ARCH=aarch64
           tags: email-organiser:ci
