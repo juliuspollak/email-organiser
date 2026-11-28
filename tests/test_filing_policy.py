@@ -73,6 +73,37 @@ class FilingPolicyTests(unittest.TestCase):
         msg["subject"]="D"+chr(0x200c)+"iscount offer"
         self.assertIsNone(proposed_operation(msg,"Promotions","safe",{},self.opts))
 
+
+    def test_bulk_unlisted_strong_sale_can_move(self):
+        self.opts["bulk_backlog_enabled"] = True
+        msg=message(list_mail=False)
+        msg["subject"]="Black Friday sale: 40% off"
+        self.assertEqual(
+            proposed_operation(msg,"Promotions","safe",{},self.opts),
+            ("move","EO Promotions"),
+        )
+
+    def test_unlisted_strong_sale_requires_bulk_opt_in(self):
+        msg=message(list_mail=False)
+        msg["subject"]="Black Friday sale: 40% off"
+        self.assertIsNone(proposed_operation(msg,"Promotions","safe",{},self.opts))
+
+    def test_bulk_weak_unlisted_promotion_stays(self):
+        self.opts["bulk_backlog_enabled"] = True
+        self.assertIsNone(proposed_operation(message(list_mail=False),"Promotions","safe",{},self.opts))
+
+    def test_bulk_subject_with_transaction_warning_stays(self):
+        self.opts["bulk_backlog_enabled"] = True
+        msg=message(list_mail=False)
+        msg["subject"]="Your order discount code"
+        self.assertIsNone(proposed_operation(msg,"Promotions","safe",{},self.opts))
+
+    def test_bulk_subject_with_hidden_format_character_stays(self):
+        self.opts["bulk_backlog_enabled"] = True
+        msg=message(list_mail=False)
+        msg["subject"]="Black Friday sale"+chr(0x200c)+" 40% off"
+        self.assertIsNone(proposed_operation(msg,"Promotions","safe",{},self.opts))
+
     def test_important_and_transactions_never_auto_move(self):
         for category in ("Important", "Transactions", "Purchase Issues", "Suspicious", "Review", "Purchases"):
             with self.subTest(category=category):
