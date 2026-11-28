@@ -450,6 +450,32 @@ def approved_policy():
     return validate_sender_policy(data.get('senders',{}))
 
 
+def strong_marketing_evidence(msg):
+    """Clearly commercial subject without relying on untrusted list headers.
+
+    This only grants a reversible promotional move when explicitly opted into
+    bulk backlog filing; no unsubscribe, deletion or spam handling.
+    """
+    subject=normalised_subject(msg.get('subject',''))
+    # Narrow phrases that indicate advertising, not account or order activity.
+    phrases=(
+        '% off', 'flash sale', 'clearance sale', 'sale ends',
+        'discount code', 'promo code', 'shop now', 'sitewide sale',
+        'exclusive deal', 'black friday sale', 'limited time offer',
+        'half price', 'special offer', 'new arrivals', 'free shipping',
+    )
+    raw=msg.get('subject','')
+    return (
+        any(p in subject for p in phrases)
+        and not any(unicodedata.category(ch)=='Cf' for ch in raw)
+        and not any(x in subject for x in (
+            'invoice','refund','payment','order','security','verify',
+            'password','delivery','shipment','tracking','account',
+            'bank','statement','insurance','cancelled','canceled',
+        ))
+    )
+
+
 def proposed_operation(msg,category,mode,policy,opts):
     """Never act on unknown or mixed/unverified policy senders. Only explicit opt-in."""
     sender=address(msg['sender'])
@@ -462,7 +488,12 @@ def proposed_operation(msg,category,mode,policy,opts):
         opts.get('auto_file_marketing',False)
         and category in ('Promotions','Newsletters')
         and bool(sender) and '@' in sender
-        and bool(msg.get('flags',{}).get('list'))
+        and (
+            bool(msg.get('flags',{}).get('list'))
+            or (opts.get('bulk_backlog_enabled',False)
+                and category=='Promotions'
+                and strong_marketing_evidence(msg))
+        )
         and (opts.get('bulk_backlog_enabled',False)
              or sender not in opts.get('_protected_marketing_senders',set()))
         # Obfuscated Unicode format characters in subjects are not safe to
@@ -744,6 +775,18 @@ def once():
                 op=proposed_operation(msg,cat,mode,policy,opts)
                 if op:
                     work.append((msg,cat,op))
+            # Explain why promotional mail did not qualify, without logging senders
+            # or message subjects. Counts are from this page, not the whole Inbox.
+            marketing=[msg for msg in messages if classify(msg,prefs)[0] in ('Promotions','Newsletters')]
+            missing_list=sum(not msg.get('flags',{}).get('list') for msg in marketing)
+            subject_only=sum(
+                not msg.get('flags',{}).get('list')
+                and classify(msg,prefs)[0]=='Promotions'
+                and strong_marketing_evidence(msg)
+                for msg in marketing
+            )
+            LOG.info('%s marketing eligibility: classified=%d, missing_list_header=%d, strong_subject_only=%d, actual_eligible=%d',
+                     account.capitalize(),len(marketing),missing_list,subject_only,len(work))
             LOG.info('%s: eligible for approved actions=%d, mode=%s, enabled=%s, auto_marketing=%s',account.capitalize(),len(work),mode,bool(opts.get('enable_actions',False)),bool(opts.get('auto_file_marketing',False)))
             if account=='gmail':
                 for msg,cat,url in gmail_oneclick_unsubscribe_candidates(messages,opts,mode)[:3]:
@@ -784,7 +827,7 @@ def once():
 
 def main():
     logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
-    LOG.info('Email Organiser v1.2.0; expanded rules gated separately, unsubscribe opt-in')
+    LOG.info('Email Organiser v1.2.1; expanded rules gated separately, unsubscribe opt-in')
     while True:
         try:
             once()
