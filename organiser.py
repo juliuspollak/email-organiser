@@ -136,8 +136,8 @@ def commercial_sender_subject(msg):
     display_name=parseaddr(msg.get('sender',''))[0].casefold()
     subject=normalised_subject(msg.get('subject',''))
     commercial_name=re.search(
-        r'\\b(?:shop|store|outlet|publishing|photobook|accessories|'
-        r'gear|deals|retail|fashion|eyewear|catalogue)\\b',
+        r'\b(?:shop|store|outlet|publishing|photobook|accessories|'
+        r'gear|deals|retail|fashion|eyewear|catalogue)\b',
         display_name
     )
     marketing_subject=(
