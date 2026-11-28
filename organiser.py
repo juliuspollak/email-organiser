@@ -412,11 +412,32 @@ def yahoo_messages(config,days,limit,backlog=False):
 
 
 def current_options():
-    opts=read_json(OPTS,{})
-    mode=opts.get('mode','dry_run')
-    if mode not in ('dry_run','safe','balanced'):
-        raise ValueError('Invalid mode; refusing actions')
-    return opts,mode
+    """One user-facing control; preserve prior enabled installations.
+
+    All automation in simple mode is reversible filing only. Deletion and
+    unsubscribe require separate future design and are never enabled here.
+    """
+    raw=read_json(OPTS,{})
+    if not isinstance(raw,dict):
+        raise ValueError('Invalid app options')
+    # Older installs have no organise_mail key; retain their prior on/off state.
+    enabled=raw.get('organise_mail')
+    if enabled is None:
+        enabled=raw.get('enable_actions',False) and raw.get('mode','dry_run')!='dry_run'
+    enabled=(enabled is True)
+    opts={
+        'enable_actions':enabled,
+        'auto_file_marketing':enabled,
+        'bulk_backlog_enabled':enabled,
+        'expanded_actions_enabled':False,
+        'trash_old_delivery_updates':False,
+        'enable_unsubscribe':False,
+        'max_actions_per_run':50,
+        'interval_minutes':15,
+        'history_days':3650,
+        'max_per_account':500,
+    }
+    return opts, 'safe' if enabled else 'dry_run'
 
 
 def operation_description(op):
@@ -827,14 +848,13 @@ def once():
 
 def main():
     logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(message)s')
-    LOG.info('Email Organiser v1.2.1; expanded rules gated separately, unsubscribe opt-in')
+    LOG.info('Email Organiser v1.3.0; one-switch reversible bulk filing')
     while True:
         try:
             once()
         except Exception as ex:
             LOG.error('Scan failed safely (%s)',type(ex).__name__)
-        opts=read_json(OPTS,{})
-        time.sleep(max(15,min(1440,int(opts.get('interval_minutes',30))))*60)
+        time.sleep(15*60)
 
 
 if __name__=='__main__':
