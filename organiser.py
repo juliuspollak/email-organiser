@@ -422,23 +422,15 @@ def yahoo_messages(config,days,limit,backlog=False):
 
 
 def current_options():
-    """One user-facing control; preserve prior enabled installations.
+    """The running app organises mail; Home Assistant Start/Stop is the control.
 
-    All automation in simple mode is reversible filing only. Deletion and
-    unsubscribe require separate future design and are never enabled here.
+    Only reversible folder/label changes are permitted. Never delete or
+    unsubscribe, regardless of residual legacy options.
     """
-    raw=read_json(OPTS,{})
-    if not isinstance(raw,dict):
-        raise ValueError('Invalid app options')
-    # Older installs have no organise_mail key; retain their prior on/off state.
-    enabled=raw.get('organise_mail')
-    if enabled is None:
-        enabled=raw.get('enable_actions',False) and raw.get('mode','dry_run')!='dry_run'
-    enabled=(enabled is True)
-    opts={
-        'enable_actions':enabled,
-        'auto_file_marketing':enabled,
-        'bulk_backlog_enabled':enabled,
+    return {
+        'enable_actions':True,
+        'auto_file_marketing':True,
+        'bulk_backlog_enabled':True,
         'expanded_actions_enabled':False,
         'trash_old_delivery_updates':False,
         'enable_unsubscribe':False,
@@ -446,8 +438,7 @@ def current_options():
         'interval_minutes':15,
         'history_days':3650,
         'max_per_account':500,
-    }
-    return opts, 'safe' if enabled else 'dry_run'
+    }, 'safe'
 
 
 def operation_description(op):
